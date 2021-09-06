@@ -1,0 +1,193 @@
+---
+title: "48 hours window traffic - PCP"
+author: "Caiwen Li"
+date: "10/31/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list=ls())
+library(RSiteCatalyst)
+library(ggplot2)
+library(RPostgreSQL)
+library(dplyr)
+library(dbplyr)
+library(data.table)
+library(lubridate)
+library(reshape2)
+library(stringr)
+library(tidyr)
+library(odbc)
+```
+
+```{r}
+SCAuth("caiwenli@rccl.com:RCCI", "3e7a72d82de775fb55c31f4dcc51b4e0")
+royal.prod <- "royalcaribbeanprod"
+start.date <- "2019-09-01"
+end.date <- "2019-09-30"
+
+pcp.sail.ship.pdp <- QueueTrended(royal.prod,
+                                   start.date,
+                                   end.date,
+                                   c("revenue","orders","visits"),
+                                   c("evar139", "evar140"),
+                                   top = 50000,
+                                   max.attempts = 1000000,
+                                   date.granularity = "day",
+                                   segment.id = c("s300006910_5d7019bed375ee6be7762957") # PCP PDP
+                                   )
+
+pcp.sail.ship.plp.only <- QueueTrended(royal.prod,
+                                   start.date,
+                                   end.date,
+                                   c("revenue","orders","visits"),
+                                   c("evar139", "evar140"),
+                                   top = 50000,
+                                   max.attempts = 1000000,
+                                   date.granularity = "day",
+                                   segment.id = c("s300006910_5d72739d7ae72226abb21d7d") # PcP PLP ONLY
+                                   )
+
+pcp.sail.ship.plp.total <- QueueTrended(royal.prod,
+                                   start.date,
+                                   end.date,
+                                   c("revenue","orders","visits"),
+                                   c("evar139", "evar140"),
+                                   top = 50000,
+                                   max.attempts = 1000000,
+                                   date.granularity = "day",
+                                   segment.id = c("s300006910_5d7019497ae72226abb21b4b") # PcP PLP TOTAL
+                                   )
+```
+
+```{r PDP}
+pcp.sail.ship.pdp$evar140 <- as.Date(pcp.sail.ship.pdp$evar140, format = '%Y%m%d')
+pcp.sail.ship.pdp$datetime <- as.Date(pcp.sail.ship.pdp$datetime)
+
+pcp.sail.ship.pdp.filter <- pcp.sail.ship.pdp %>% 
+  mutate(day.diff = evar140 - datetime) %>% 
+  filter(day.diff <= 4,
+         day.diff >= 0) 
+
+day.diff.pdp <- pcp.sail.ship.pdp.filter %>% 
+  group_by(day.diff) %>% 
+  summarise(visits = sum(visits))
+
+date.day.diff.pdp <- pcp.sail.ship.pdp.filter %>% 
+  group_by(evar140, datetime, day.diff) %>% 
+  summarise(visits = sum(visits))
+
+ship.day.diff.pdp <- pcp.sail.ship.pdp.filter %>% 
+  group_by(evar139, day.diff) %>% 
+  summarise(visits = sum(visits))
+
+ship.day.diff.pdp.dcast <- ship.day.diff.pdp %>% 
+    dcast(evar139 ~ day.diff)
+```
+
+```{r PLP only}
+pcp.sail.ship.plp.only$evar140 <- as.Date(pcp.sail.ship.plp.only$evar140, format = '%Y%m%d')
+pcp.sail.ship.plp.only$datetime <- as.Date(pcp.sail.ship.plp.only$datetime)
+
+pcp.sail.ship.plp.only.filter <- pcp.sail.ship.plp.only %>% 
+  mutate(day.diff = evar140 - datetime) %>% 
+  filter(day.diff <= 4,
+         day.diff >= 0) 
+
+day.diff.plp.only <- pcp.sail.ship.plp.only.filter %>% 
+  group_by(day.diff) %>% 
+  summarise(visits = sum(visits))
+
+date.day.diff.plp.only <- pcp.sail.ship.plp.only.filter %>% 
+  group_by(evar140, datetime, day.diff) %>% 
+  summarise(visits = sum(visits))
+
+ship.day.diff.plp.only <- pcp.sail.ship.plp.only.filter %>% 
+  group_by(evar139, day.diff) %>% 
+  summarise(visits = sum(visits))
+
+ship.day.diff.plp.only.dcast <- ship.day.diff.plp.only %>% 
+  dcast(evar139 ~ day.diff)
+```
+
+```{r PLP total}
+pcp.sail.ship.plp.total$evar140 <- as.Date(pcp.sail.ship.plp.total$evar140, format = '%Y%m%d')
+pcp.sail.ship.plp.total$datetime <- as.Date(pcp.sail.ship.plp.total$datetime)
+
+pcp.sail.ship.plp.total.filter <- pcp.sail.ship.plp.total %>% 
+  mutate(day.diff = evar140 - datetime) %>% 
+  filter(day.diff <= 4,
+         day.diff >= 0) 
+
+day.diff.plp.total <- pcp.sail.ship.plp.total.filter %>% 
+  group_by(day.diff) %>% 
+  summarise(visits = sum(visits))
+
+date.day.diff.plp.total <- pcp.sail.ship.plp.total.filter %>% 
+  group_by(evar140, datetime, day.diff) %>% 
+  summarise(visits = sum(visits))
+
+ship.day.diff.plp.total <- pcp.sail.ship.plp.total.filter %>% 
+  group_by(evar139, day.diff) %>% 
+  summarise(visits = sum(visits))
+
+ship.day.diff.plp.total.dcast <- ship.day.diff.plp.total %>% 
+  dcast(evar139 ~ day.diff)
+
+write.csv(day.diff.ship.backend,"C:/Users/7005773/Desktop/day.diff.ship.backend.csv")
+```
+
+```{r database connections}
+options(java.parameters = "-Xmx8g")
+library("RJDBC")
+library(RJDBC)
+drv <- JDBC("oracle.jdbc.OracleDriver",classPath="C:/users/7005773/Downloads/ojdbc6.jar")
+con.oracle <- dbConnect(drv, "jdbc:oracle:thin:@//dmmktgp_exa.rccl.com:1689/DMMKTGP.RCCL.COM", "DIGITALBI","^!tRGAD!gk*VVDn4T69h3P2XX%")
+
+pcp.orders <- paste("SELECT t.SHIP_CODE,
+       t.SAIL_DATE,
+       TRUNC(t.ASR_PRODUCT_BOOKING_DTM) ASR_PRODUCT_BOOKING_DTM,
+       COUNT(DISTINCT t.ORDERS) ORDERS 
+FROM DIGITALBI.PCP_TRANSACTION_LEVEL t
+WHERE TRUNC(t.ASR_PRODUCT_BOOKING_DTM) >= '01-SEP-2019' 
+      AND TRUNC(t.ASR_PRODUCT_BOOKING_DTM) <= '30-SEP-2019' 
+      AND CHANNEL = 'Web'
+GROUP BY TRUNC(t.ASR_PRODUCT_BOOKING_DTM),
+         t.SAIL_DATE,
+         t.SHIP_CODE", sep="")
+
+pcp.orders.query <- dbGetQuery(con.oracle, pcp.orders)
+
+pcp.orders.query$SAIL_DATE <- as.Date(pcp.orders.query$SAIL_DATE)
+
+pcp.orders.query$ASR_PRODUCT_BOOKING_DTM <- as.Date(pcp.orders.query$ASR_PRODUCT_BOOKING_DTM)
+
+pcp.orders.query.fix <- pcp.orders.query %>% 
+  mutate(day.diff = SAIL_DATE- ASR_PRODUCT_BOOKING_DTM) %>% 
+  filter(day.diff >= 0,
+         day.diff <= 4)
+
+day.diff.backend <- pcp.orders.query %>% 
+  mutate(day.diff = SAIL_DATE- ASR_PRODUCT_BOOKING_DTM) %>% 
+  filter(day.diff >= 0,
+         day.diff <= 4) %>% 
+  group_by(day.diff) %>% 
+  summarise(orders = sum(ORDERS))
+
+day.diff.ship.backend <- pcp.orders.query %>% 
+  mutate(day.diff = SAIL_DATE- ASR_PRODUCT_BOOKING_DTM) %>% 
+  filter(day.diff >= 0,
+         day.diff <= 4) %>% 
+  group_by(SHIP_CODE, day.diff) %>% 
+  summarise(orders = sum(ORDERS))
+
+day.diff.ship.backend.dcast <- day.diff.ship.backend %>% 
+  dcast(SHIP_CODE ~ day.diff)
+
+write.csv(day.diff.ship.backend,"C:/Users/7005773/Desktop/day.diff.ship.backend.csv")
+```
+

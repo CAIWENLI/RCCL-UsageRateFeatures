@@ -1,0 +1,289 @@
+---
+title: "Usage of Percentage"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+rm(list=ls())
+library(RSiteCatalyst)
+library(RPostgreSQL)
+library(dplyr)
+library(dbplyr)
+library(data.table)
+library(lubridate)
+library(reshape2)
+library(stringr)
+library(ggplot2)
+SCAuth("caiwenli@rccl.com:RCCI", "3e7a72d82de775fb55c31f4dcc51b4e0")
+```
+
+```{r metrics pull}
+error.name <- QueueRanked("rcciexcaliburprod",
+                          "2019-01-01",
+                          "2019-07-31",
+                          c("visits","uniquevisitors", "pageviews"),
+                          c("evar109"),
+                          top = 50000,
+                          segment.id = "s300006910_59c41d59c06c5c10c89f449d") # app only
+
+error.name.pdp <- error.name %>% 
+  filter(str_detect(name, "pdp")) %>% 
+  group_by(name) %>%  
+  summarise(visits = sum(visits),
+            unique.visitor = sum(uniquevisitors),
+            pageviews = sum(pageviews))
+
+error.name.trend <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("visits","uniquevisitors", "pageviews"),
+                            c("evar109"), # error name
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+error.name.trend$datetime <- as.Date(error.name.trend$datetime)
+
+error.name.pdp.trend <- error.name.trend %>% 
+  filter(str_detect(name, "pdp")) %>% 
+  group_by(datetime, name) %>% 
+  summarise(visits = sum(visits),
+            unique.visitor = sum(uniquevisitors),
+            pageviews = sum(pageviews))
+
+booking.type <- QueueRanked("rcciexcaliburprod",
+                             "2019-01-01",
+                             "2019-07-31",
+                            c("visits","uniquevisitors", "pageviews", "orders", "revenue"),
+                            c("evar169"),
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d","s300006910_59de69e94cfe090d7d6edecf")
+
+booking.type.trend <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("visits","uniquevisitors", "pageviews", "orders", "revenue"),
+                            c("evar169"),
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+booking.type.trend$datetime <- as.Date(booking.type.trend$datetime)
+
+booking.type.trend.fix <- booking.type.trend %>% 
+  filter(!str_detect(name, "unspecified"))
+```
+
+```{r events pull}
+all.events <- QueueOvertime("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event150", # Link guests
+                              "event298", # Select guests (No need)
+                              "event299", # Select (Available) Day
+                              "event13",  # View Total Pricing per Time
+                              "event296", # Select Available Times
+                              "event297", # Browse other options 
+                              "event350", # Acknowledge T&C
+                              "event293", # Edit Guests
+                              "event292", # Edit Day
+                              "event294", # Edit Time
+                              "event403", # Cancel (No need)
+                              "event402", # Manage reservation
+                              "checkouts", # View Price by Grouping/View Total Price
+                              "orders"),
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+
+```
+
+```{r segments pull}
+# segments <- GetSegments(rs$rsid)
+# write.csv(segments,"C:/Users/7005773/Desktop/Code/R Code/Outputs/segments2.csv")
+
+my.resversation.page <- QueueOvertime("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("visits","uniquevisitors", "pageviews", "orders", "revenue"),
+                            segment.id = "s300006910_5b3121c4ab80a6553ded027d")
+```
+
+```{r double filter event + evar}
+flex.dining <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event299","event293", "event294"),
+                            c("evar203"), # product category
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+flex.dining$datetime <- as.Date(flex.dining$datetime)
+flex.dining <- flex.dining %>% 
+  filter(name %in% "flexdining")
+
+cancel.event <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event403"),
+                            c("evar198"), # cancel feature
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+cancel.event$datetime <- as.Date(cancel.event$datetime)
+cancel.event <- cancel.event %>% 
+  filter(!name %in% "::unspecified::")
+
+product.sold.out <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event13"),
+                            c("evar199"),
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+product.sold.out$datetime <- as.Date(product.sold.out$datetime)
+
+product.sold.out <- product.sold.out %>% 
+  filter(name %in% "ProductStatus:SoldOut") 
+
+link.guest.other.room <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event298"),
+                            c("evar169"),
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+
+link.guest.other.room$datetime <- as.Date(link.guest.other.room$datetime)
+
+link.guest.other.room <- link.guest.other.room %>% 
+  filter(name %in% "ResLinked:YesLinkedGuestsSelected")
+
+```
+
+```{r reshape the data}
+selected.events <- all.events[,c(1,8:21)]
+selected.events <- selected.events[,c(1,2,4:11,13:15)]
+
+colnames(selected.events) <- c("date","link.guests", "select.available.day","view.total.pricing.per.day","select.available.time","browse.other.options","acknowledge.t&c","edit.guests","edit.day","edit.time","manage.rervation","view.total.price","finalize.reservation")
+
+
+error.name.pdp.trend.reshape <- error.name.pdp.trend[,c(1:3)]%>% 
+  dcast(datetime ~ name)
+
+link.guest.other.room <- link.guest.other.room[,c(1,4)]
+colnames(link.guest.other.room) <- c("date", "link.guest.from.other.room")
+
+flex.dining <- flex.dining[,c(1,4:6)]
+colnames(flex.dining) <- c("date", "flex.select.available.day", "flex.edit.guests", "flex.edit.time")
+
+cancel.event <- cancel.event[,c(1,2,4)]
+cancel.event <- dcast(cancel.event,datetime ~ name)
+
+my.resversation.page <- my.resversation.page[,c(1,8)] 
+
+colnames(my.resversation.page) <- c("date", "my.resversation.page")
+my.resversation.page$date <- as.Date(my.resversation.page$date)
+selected.events$date <- as.Date(selected.events$date) 
+
+product.sold.out <- product.sold.out[,c(1,4)] 
+colnames(product.sold.out) <- c("date", "product.sold.out")
+product.sold.out$date <- as.Date(product.sold.out$date)
+
+
+booking.type.trend.fix <- booking.type.trend.fix[,c(1,2,4)] %>% 
+  dcast(datetime ~ name) 
+  
+
+all.features <- selected.events %>% 
+  inner_join(link.guest.other.room, by = "date") %>% 
+  inner_join(flex.dining, by ="date") %>% 
+  inner_join(error.name.pdp.trend.reshape, by = c("date" = "datetime")) %>% 
+  inner_join(cancel.event, by = c("date" = "datetime")) %>% 
+  inner_join(my.resversation.page, by = "date") %>% 
+  inner_join(product.sold.out, by = "date")
+
+write.csv(all.features,"C:/Users/7005773/Desktop/Work/Ad Hoc/Features Performance/all.features.csv")
+
+```
+
+```{r cancel rate}
+cancel.feature <- selected.events %>% 
+  inner_join(cancel.event, by = c("date" = "datetime")) %>% 
+  select(date, finalize.reservation, `Owner Cancel`, `Attendee Cancel`) %>% 
+  mutate(cancel.total = `Owner Cancel` + `Attendee Cancel`,
+         cancel.rate = cancel.total/finalize.reservation)
+
+total.cancel.rate <- cancel.feature %>% 
+  summarize(cancel.total = sum(cancel.total),
+            finalize.reservation = sum(finalize.reservation),
+            cancel.rate = sum(cancel.total)/sum(finalize.reservation))
+
+cancel.event <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event403"),
+                            c("evar198"), # cancel feature
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+cancel.event$datetime <- as.Date(cancel.event$datetime)
+cancel.event <- cancel.event %>% 
+  filter(!name %in% "::unspecified::")
+
+cancel.event.product <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event403"),
+                            c("product","evar198"),
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d",
+                            classification = "Product Category")
+
+order.event.product <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("orders"),
+                            c("product"),
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d",
+                            classification = "Product Category")
+
+cancel.event.product$datetime <- as.Date(cancel.event.product$datetime)
+cancel.event.product <- cancel.event.product %>% 
+  filter(!`product: Product Category` %in% "::unspecified::",
+         ! evar198 %in% "::unspecified::")
+
+order.event.product$datetime <- as.Date(order.event.product$datetime)
+order.event.product <- order.event.product %>% 
+  filter(! name %in% "::unspecified::")
+
+cancel.event.product <- cancel.event.product[,c(1:4)]
+cancel.event.product.dcast <- dcast(cancel.event.product, datetime + `product: Product Category` ~ evar198)
+
+cancel.event.product.dcast[is.na(cancel.event.product.dcast)] <- 0
+
+cancel.product <- cancel.event.product.dcast %>% 
+  mutate(total.cancel = `Attendee Cancel` + `Owner Cancel`)
+
+cancel.product.filter <- cancel.product[,c(1,2,7)]
+colnames(cancel.product.filter) <- c("date", "prod.cat", "cancel")
+order.product.filter <- order.event.product[,c(1,2,4)]
+colnames(order.product.filter) <- c("date", "prod.cat", "order")
+
+cancellation.rate.product <- cancel.product.filter %>% 
+  full_join(order.product.filter, by = c("date", "prod.cat")) %>% 
+  mutate(cancel.rate = cancel/order)
+
+cancellation.rate.product[is.na(cancellation.rate.product)] <- 0
+
+total.product.cancel <- cancellation.rate.product %>% 
+  group_by(prod.cat) %>% 
+  summarize(cancel = sum(cancel),
+            order = sum(order),
+            per_cancel = sum(cancel)/sum(order))
+
+total.product.cancel$per_cancel <- paste(round(100*total.product.cancel$per_cancel, 1), "%", sep="")
+
+Cancellation.Rate <- total.product.cancel$per_cancel
+Product.Categories <- total.product.cancel$prod.cat
+
+Plot.Cancel <- ggplot(total.product.cancel, aes( x = Product.Categories, y = Cancellation.Rate, fill = Product.Categories)) +
+  geom_bar(stat="identity") + theme_minimal()
+
+Plot.Cancel
+```
+

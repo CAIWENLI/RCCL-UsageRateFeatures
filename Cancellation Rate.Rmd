@@ -1,0 +1,227 @@
+---
+title: "Cancellation Rate"
+author: "Caiwen Li"
+date: "8/7/2019"
+output: html_document
+---
+```{r packages}
+rm(list=ls())
+library(RSiteCatalyst)
+library(RPostgreSQL)
+library(dplyr)
+library(dbplyr)
+library(data.table)
+library(lubridate)
+library(reshape2)
+library(stringr)
+library(ggplot2)
+SCAuth("caiwenli@rccl.com:RCCI", "3e7a72d82de775fb55c31f4dcc51b4e0")
+```
+
+```{r review events}
+review.page.events <- QueueOvertime("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event350", # Acknowledge T&C
+                              "event293", # Edit Guests
+                              "event292", # Edit Day
+                              "event294", # Edit Time
+                              "event403", # Cancel (No need)
+                              "event402", # Manage reservation
+                              "checkouts", # View Price by Grouping/View Total Price
+                              "orders"),
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+
+review.page.events <- review.page.events[,c(1,8:15)]
+
+colnames(review.page.events) <- c("date","acknowledge.t&c","edit.guests","edit.day","edit.time","cancel.event","manage.rervation","view.total.price","finalize.reservation")
+
+```
+
+```{r cancellation - step 2}
+cancel.event <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event403"),
+                            c("evar198"), # cancel feature
+                            top = 50000,
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d")
+cancel.event$datetime <- as.Date(cancel.event$datetime)
+cancel.event <- cancel.event %>% 
+  filter(!name %in% "::unspecified::")
+
+cancel.event <- cancel.event[,c(1,2,4)]
+cancel.event <- dcast(cancel.event,datetime ~ name)
+
+```
+
+```{r cancel rate - total}
+review.page.events$date <- as.Date(review.page.events$date)
+
+cancel.feature <- review.page.events %>% 
+  inner_join(cancel.event, by = c("date" = "datetime")) %>% 
+  select(date, finalize.reservation, `Owner Cancel`, `Attendee Cancel`) %>% 
+  mutate(cancel.total = `Owner Cancel` + `Attendee Cancel`,
+         cancel.rate = round(cancel.total/finalize.reservation,2))
+
+cancel.feature <- cancel.feature[,c(1,2,5,6)]
+
+plot.can <- ggplot(NULL, aes(y = cancel.feature$cancel.rate, x = date)) + 
+  geom_line() + geom_point() 
+
+plot.can
+print(plot.can + ggtitle("Cancellation Rate Trend"))
+
+hist(cancel.feature$cancel.rate, main = "Density of Cancellation Rate")
+
+write.csv(cancel.feature,"C:/Users/7005773/Desktop/Work/Ad Hoc/cancel.feature.csv")
+
+total.cancel.rate <- cancel.feature %>% 
+  summarize(cancel.total = sum(cancel.total),
+            finalize.reservation = sum(finalize.reservation),
+            cancel.rate = sum(cancel.total)/sum(finalize.reservation))
+
+```
+
+```{r cancel rate - product category level}
+cancel.event.product <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("event403"),
+                            c("product","evar198"),
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d",
+                            classification = "Product Category")
+
+order.event.product <- QueueTrended("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("orders"),
+                            c("product"),
+                            segment.id = "s300006910_59c41d59c06c5c10c89f449d",
+                            classification = "Product Category")
+
+cancel.event.product$datetime <- as.Date(cancel.event.product$datetime)
+cancel.event.product <- cancel.event.product %>% 
+  filter(!`product: Product Category` %in% "::unspecified::",
+         ! evar198 %in% "::unspecified::")
+
+order.event.product$datetime <- as.Date(order.event.product$datetime)
+order.event.product <- order.event.product %>% 
+  filter(! name %in% "::unspecified::")
+
+cancel.event.product <- cancel.event.product[,c(1:4)]
+cancel.event.product.dcast <- dcast(cancel.event.product, datetime + `product: Product Category` ~ evar198)
+
+cancel.event.product.dcast[is.na(cancel.event.product.dcast)] <- 0
+
+cancel.product <- cancel.event.product.dcast %>% 
+  mutate(total.cancel = `Attendee Cancel` + `Owner Cancel`)
+
+cancel.product.filter <- cancel.product[,c(1,2,7)]
+colnames(cancel.product.filter) <- c("date", "prod.cat", "cancel")
+order.product.filter <- order.event.product[,c(1,2,4)]
+colnames(order.product.filter) <- c("date", "prod.cat", "order")
+
+cancellation.rate.product <- cancel.product.filter %>% 
+  full_join(order.product.filter, by = c("date", "prod.cat")) %>% 
+  mutate(cancel.rate = cancel/order)
+
+cancellation.rate.product[is.na(cancellation.rate.product)] <- 0
+
+total.product.cancel <- cancellation.rate.product %>% 
+  group_by(prod.cat) %>% 
+  summarize(cancel = sum(cancel),
+            order = sum(order),
+            per_cancel = sum(cancel)/sum(order))
+
+total.product.cancel$per_cancel <- paste(round(100*total.product.cancel$per_cancel, 1), "%", sep="")
+
+Cancellation.Rate <- total.product.cancel$per_cancel
+Product.Categories <- total.product.cancel$prod.cat
+
+write.csv(cancellation.rate.product,"C:/Users/7005773/Desktop/Work/Ad Hoc/cancellation.rate.product.csv")
+
+Plot.Cancel <- ggplot(total.product.cancel, aes( x = Product.Categories, y = Cancellation.Rate, fill = Product.Categories, main ="Main title")) +
+  geom_bar(stat="identity") + theme_minimal() 
+
+Plot.Cancel
+
+print(Plot.Cancel + ggtitle("Cancellation Rate by Product Categories (YTD)"))
+```
+
+```{r resversation page visits times}
+my.resversation.page <- QueueOvertime("rcciexcaliburprod",
+                            "2019-01-01",
+                            "2019-07-31",
+                            c("visits","uniquevisitors", "pageviews", "orders", "revenue"),
+                            segment.id = "s300006910_5b3121c4ab80a6553ded027d")
+
+my.resversation.page$date <- as.Date(my.resversation.page$date)
+
+manage.times <- my.resversation.page %>% 
+  select(datetime, visits, uniquevisitors, pageviews) %>% 
+  mutate(manage.times.sessions = round(visits/uniquevisitors,2),
+         manage.times.pageviews = round(pageviews/uniquevisitors,2))
+
+sessions.per.visitor <- manage.times$manage.times.sessions
+pageview.per.visitor <- manage.times$manage.times.pageviews
+date <- manage.times$datetime
+
+par(mfrow=c(2,1)) 
+hist(sessions.per.visitor, main = "Density of Sessions per Visitor on My Reservation Page")
+hist(pageview.per.visitor, main = "Density of Page Views per Visitor on My Reservation Page")
+
+
+plot.res <- ggplot(NULL, aes(y = pageview.per.visitor, x = date)) + 
+  geom_line() + geom_point() 
+
+plot.res
+print(plot.res + ggtitle("Page Views per Visitor on My reservation page Trend"))
+  
+
+
+```
+
+```{r acknowledge page read rate}
+tbl_vars(review.page.events)
+review.page.events$finalize.reservation
+acknowledge.click <- review.page.events[,c(1,2,8,9)] %>% 
+  mutate(acknowledge.page = round(`acknowledge.t&c`/ view.total.price,4),
+         acknowledge.order = round(`acknowledge.t&c`/ finalize.reservation,4))
+
+hist(acknowledge.click$acknowledge.page, main = "Density of Acknowledge Click")
+
+plot.res <- ggplot(NULL, aes(y = acknowledge.click$acknowledge.page, x = date)) + 
+  geom_line() + geom_point() 
+
+plot.res
+print(plot.res + ggtitle("Acknowledge Click Rate Trend"))
+
+total.acknowledge.rate <- acknowledge.click %>% 
+  summarize(acknowledge.page = round(sum(`acknowledge.t&c`)/sum(view.total.price),4),
+            acknowledge.order = round(sum(`acknowledge.t&c`)/sum(finalize.reservation),4))
+
+```
+
+```{r Backend Cancellation Rate}
+library(odbc)
+con.microsoft.sql <- DBI::dbConnect(odbc::odbc(),
+                      Driver   = "SQL Server",
+                      Server   = "rcclanalyticssql.database.windows.net",
+                      Database = "rcclanalytics",
+                      UID      = "caiwenli",
+                      PWD      = "Travel.Florida2019!",
+                      Port     = 1433)
+
+tbl_vars(dbo.rev.query)
+
+backend.cancellation.rate <- dbo.rev.query %>% 
+  filter(CREATION_APPLICATION_NAME %in% "EXCALIBUR_MOBILE_APP") %>% 
+  group_by(BOOKING_STATUS_DESC) %>% 
+  summarize(payment_amount = sum(TOTAL_PAYMENT_AMT),
+            total_revenue = sum(TOTAL_REVENUE),
+            total_refund = sum(REFUND_PAYMENT_AMT),
+            orders = n()) 
+
+```
+
